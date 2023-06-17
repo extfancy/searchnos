@@ -1,0 +1,55 @@
+---
+services:
+  es:
+    build: ./docker/es
+    container_name: searchnos-es
+    environment:
+      - "discovery.type=single-node"
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "ELASTIC_PASSWORD=${ELASTIC_PASSWORD}"
+      - "http.cors.enabled=true"
+      - 'http.cors.allow-origin="*"'
+      - "xpack.security.http.ssl.enabled=false"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - 9200:9200
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    restart: always
+
+
+  indexer:
+    build:
+      context: .
+      dockerfile: ./docker/indexer/Dockerfile
+    container_name: searchnos-indexer
+    environment:
+      - SRC_RELAYS=${SRC_RELAYS}
+      - DEST_RELAYS=ws://searchnos:3000?api_key=${API_KEY}
+    restart: always
+    depends_on:
+      searchnos:
+        condition: service_started
+
+  searchnos:
+    build:
+      context: .
+      dockerfile: ./docker/searchnos/Dockerfile
+    container_name: searchnos
+    environment:
+      - ES_URL=http://elastic:${ELASTIC_PASSWORD}@es:9200
+      - PORT=3000
+      - API_KEY=${API_KEY}
+    restart: always
+    depends_on:
+      es:
+        condition: service_healthy
+    ports:
+      - 3000:3000
+
+volumes:
+  es-data:
+    driver: local
