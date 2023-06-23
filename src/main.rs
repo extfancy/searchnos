@@ -1,33 +1,30 @@
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::{FromRequestParts, Query};
+use axum::extract::{ FromRequestParts, Query };
 use axum::http::request::Parts;
-use axum::{async_trait, Extension};
+use axum::{ async_trait, Extension };
 use axum::{
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::ws::{ Message, WebSocket, WebSocketUpgrade },
     http::StatusCode,
     response::IntoResponse,
     routing::get,
     Router,
 };
 use elasticsearch::{
-    http::{
-        transport::{SingleNodeConnectionPool, TransportBuilder},
-        Url,
-    },
+    http::{ transport::{ SingleNodeConnectionPool, TransportBuilder }, Url },
     Elasticsearch,
 };
 use env_logger;
-use futures::{sink::SinkExt, stream::StreamExt};
-use nostr_sdk::prelude::{RelayInformationDocument, RelayMessage};
+use futures::{ sink::SinkExt, stream::StreamExt };
+use nostr_sdk::prelude::{ RelayInformationDocument, RelayMessage };
 use searchnos::app_state::AppState;
 use searchnos::index::handlers::handle_event;
 use searchnos::index::purge::spawn_index_purger;
-use searchnos::index::schema::{create_index_template, put_pipeline};
-use searchnos::search::handlers::{handle_close, handle_req};
+use searchnos::index::schema::{ create_index_template, put_pipeline };
+use searchnos::search::handlers::{ handle_close, handle_req };
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::time::Duration;
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{ env, net::SocketAddr, sync::Arc };
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -42,7 +39,7 @@ async fn handle_text_message(
     join_handles: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     addr: SocketAddr,
     text: &String,
-    is_admin_connection: bool,
+    is_admin_connection: bool
 ) -> anyhow::Result<()> {
     let msg: Vec<serde_json::Value> = serde_json::from_str(&text)?;
     if msg.len() < 1 {
@@ -54,7 +51,7 @@ async fn handle_text_message(
         Some("CLOSE") => handle_close(join_handles, addr, &msg).await?,
         Some("EVENT") => {
             if is_admin_connection {
-                handle_event(state, addr, &msg).await?
+                handle_event(state, addr, &msg).await?;
             } else {
                 return Err(anyhow::anyhow!("EVENT message not allowed")); // TODO support NIP-20
             }
@@ -73,7 +70,7 @@ async fn process_message(
     join_handles: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     addr: SocketAddr,
     msg: Message,
-    is_admin_connection: bool,
+    is_admin_connection: bool
 ) -> anyhow::Result<()> {
     match &msg {
         Message::Text(text) => {
@@ -83,9 +80,8 @@ async fn process_message(
                 join_handles,
                 addr,
                 &text,
-                is_admin_connection,
-            )
-            .await?
+                is_admin_connection
+            ).await?;
         }
         Message::Close(_) => {
             log::info!("{} close message received", addr);
@@ -101,21 +97,17 @@ async fn process_message(
 
 async fn send_notice(
     sender: Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
-    msg: &str,
+    msg: &str
 ) -> anyhow::Result<()> {
     let notice = RelayMessage::new_notice(msg);
-    sender
-        .lock()
-        .await
-        .send(Message::Text(notice.as_json()))
-        .await?;
+    sender.lock().await.send(Message::Text(notice.as_json())).await?;
     Ok(())
 }
 
 async fn spawn_pinger(
     state: Arc<AppState>,
     sender: Arc<Mutex<futures::stream::SplitSink<WebSocket, Message>>>,
-    addr: SocketAddr,
+    addr: SocketAddr
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -134,13 +126,9 @@ async fn websocket(
     socket: WebSocket,
     state: Arc<AppState>,
     addr: SocketAddr,
-    is_admin_connection: bool,
+    is_admin_connection: bool
 ) {
-    log::info!(
-        "{} new websocket connection (admin: {})",
-        addr,
-        is_admin_connection
-    );
+    log::info!("{} new websocket connection (admin: {})", addr, is_admin_connection);
     let (sender, mut receiver) = socket.split();
     let sender = Arc::new(Mutex::new(sender));
     let join_handles = Arc::new(Mutex::new(HashMap::<String, JoinHandle<()>>::new()));
@@ -195,10 +183,7 @@ async fn ping() -> impl IntoResponse {
 struct ReturnRelayInfoExtractor {}
 
 #[async_trait]
-impl<S> FromRequestParts<S> for ReturnRelayInfoExtractor
-where
-    S: Send + Sync,
-{
+impl<S> FromRequestParts<S> for ReturnRelayInfoExtractor where S: Send + Sync {
     type Rejection = axum::response::Response;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
@@ -209,12 +194,12 @@ where
                 if accept == "application/nostr+json" {
                     use axum::RequestPartsExt;
                     let Extension(state) = parts
-                        .extract::<Extension<Arc<AppState>>>()
-                        .await
+                        .extract::<Extension<Arc<AppState>>>().await
                         .map_err(|err| err.into_response())?;
                     let relay_info = state.relay_info.clone();
 
-                    let res = axum::response::Response::builder()
+                    let res = axum::response::Response
+                        ::builder()
                         .status(StatusCode::OK)
                         .header("Content-Type", "application/json")
                         .body(relay_info)
@@ -224,7 +209,8 @@ where
                     return Err(res);
                 }
             }
-            let res = axum::response::Response::builder()
+            let res = axum::response::Response
+                ::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/text")
                 .body("Please use a Nostr client to connect.".to_string())
@@ -241,7 +227,7 @@ async fn websocket_handler(
     params: Query<Parameter>,
     ws: WebSocketUpgrade,
     Extension(state): Extension<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>
 ) -> impl IntoResponse {
     let is_admin_connection = if let Some(api_key) = &params.api_key {
         state.api_key == *api_key
@@ -269,42 +255,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // env vars
     let es_url = env::var("ES_URL").expect("ES_URL is not set; set it to the URL of elasticsearch");
     let port = env::var("PORT").expect("PORT is not set; set it to the port number to listen on");
-    let port = port
-        .parse::<u16>()
-        .expect("PORT is not a valid port number");
-    let api_key = env::var("API_KEY").expect(
-        "API_KEY is not set; specify the key for the administrative connection to searchnos",
-    );
+    let port = port.parse::<u16>().expect("PORT is not a valid port number");
+    let api_key = env
+        ::var("API_KEY")
+        .expect(
+            "API_KEY is not set; specify the key for the administrative connection to searchnos"
+        );
     if api_key.is_empty() {
         panic!("API_KEY must not be empty");
     }
     let max_subscriptions = if let Ok(max_subscriptions) = env::var("MAX_SUBSCRIPTIONS") {
-        max_subscriptions
-            .parse::<usize>()
-            .expect("MAX_SUBSCRIPTIONS is not a valid number")
+        max_subscriptions.parse::<usize>().expect("MAX_SUBSCRIPTIONS is not a valid number")
     } else {
         8
     };
     let max_filters = if let Ok(max_filters) = env::var("MAX_FILTERS") {
-        max_filters
-            .parse::<usize>()
-            .expect("MAX_FILTERS is not a valid number")
+        max_filters.parse::<usize>().expect("MAX_FILTERS is not a valid number")
     } else {
         8
     };
     let ping_interval = if let Ok(ping_interval) = env::var("PING_INTERVAL") {
-        ping_interval
-            .parse::<u64>()
-            .expect("PING_INTERVAL is not a valid number")
+        ping_interval.parse::<u64>().expect("PING_INTERVAL is not a valid number")
     } else {
         55
     };
     let ping_interval = Duration::from_secs(ping_interval);
-    let index_ttl_days: Option<u64> = env::var("INDEX_TTL_DAYS").ok().map(|index_ttl_days| {
-        index_ttl_days
-            .parse::<u64>()
-            .expect("INDEX_TTL_DAYS is not a valid number")
-    });
+    let index_ttl_days: Option<u64> = env
+        ::var("INDEX_TTL_DAYS")
+        .ok()
+        .map(|index_ttl_days| {
+            index_ttl_days.parse::<u64>().expect("INDEX_TTL_DAYS is not a valid number")
+        });
     let index_allow_future_days = 1;
 
     log::info!("connecting to elasticsearch");
@@ -324,9 +305,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         index_template_name,
         pipeline_name,
         index_name_prefix,
-        index_template_name,
-    )
-    .await?;
+        index_template_name
+    ).await?;
     log::info!("elasticsearch index ready");
 
     let mut relay_info = RelayInformationDocument::new();
@@ -343,7 +323,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         index_name_prefix: index_name_prefix.to_string(),
         index_alias_name: index_alias_name.to_string(),
         max_subscriptions, // TODO include this in relay info
-        max_filters,       // TODO include this in relay info
+        max_filters, // TODO include this in relay info
         api_key,
         ping_interval,
         index_ttl_days,
@@ -363,9 +343,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     log::info!("listening on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
+    axum::Server
+        ::bind(&addr)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>()).await
         .unwrap();
 
     Ok(())
